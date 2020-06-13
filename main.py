@@ -137,7 +137,7 @@ def train(fold):
             model,
             device
         )
-
+        # import pdb; pdb.set_trace()
         predictions = np.vstack((predictions)).ravel()
         auc = metrics.roc_auc_score(valid_targets, predictions)
         scheduler.step(auc)
@@ -178,10 +178,10 @@ def predict(fold):
 
     # datasets
     test_dataset = ClassificationLoader(
-        image_paths=train_images,
-        targets=train_targets,
+        image_paths=test_images,
+        targets=test_targets,
         resize=None,
-        augmentations=train_aug
+        augmentations=test_aug
     )
 
     # loaders  
@@ -205,5 +205,18 @@ def predict(fold):
     return np.vstack((predictions)).ravel()
 
 if __name__ == "__main__":
-    train(fold=0)
-    predict(fold=0)
+    # training
+    # for fold in range(0,5):
+    #     train(fold)
+    
+    #predicting
+    all_predictions = []
+    for fold in range(0,5):
+        all_predictions.append(predict(fold))
+    
+    predictions = sum(all_predictions) / 5
+    import pdb; pdb.set_trace()
+    submission = pd.read_csv("/home/dragoshh1984/repos/kaggle/datasets/melanomia_classification/sample_submission.csv")
+    submission.loc[:, "target"] = predictions
+    submission.to_csv("submission.csv", index=False)
+

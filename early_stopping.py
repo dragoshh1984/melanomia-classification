@@ -32,6 +32,8 @@ class EarlyStopping:
                     self.counter, self.patience
                 )
             )
+            if self.counter >= self.patience:
+                self.early_stop = True
         else:
             self.best_score = score
             self.save_checkpoint(epoch_score, model, model_path)
