@@ -9,8 +9,9 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
 class ClassificationLoader:
-    def __init__(self, image_paths, targets, resize, augmentations=None):
+    def __init__(self, image_paths, metadata, targets, resize, augmentations=None):
         self.image_paths = image_paths
+        self.metadata = metadata
         self.targets = targets
         self.resize = resize
         self.augmentations = augmentations
@@ -21,6 +22,7 @@ class ClassificationLoader:
     def __getitem__(self, item):
         image = Image.open(self.image_paths[item])
         image = image.convert("RGB")
+        metadata = self.metadata[item]
         targets = self.targets[item]
 
         if self.resize is not None:
@@ -37,5 +39,6 @@ class ClassificationLoader:
 
         return {
             "image": torch.tensor(image, dtype=torch.float),
+            "metadata": torch.tensor(metadata, dtype=torch.float),
             "targets": torch.tensor(targets, dtype=torch.long),
         }

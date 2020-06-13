@@ -1,54 +1,77 @@
 import os
 import torch
 
-import pretrainedmodels
 import albumentations
 
 import numpy as np
 import pandas as pd
 import torch.nn as nn
 
+from efficientnet_pytorch import EfficientNet
 from sklearn import metrics
 from torch.nn import functional as F
 
+
 from engine import Engine
 from early_stopping import EarlyStopping
-from loader import ClassificationLoader
+from loader3 import ClassificationLoader
 
 
-class SEResNext50_32x4d(nn.Module):
+class EfficientNet_tabular(nn.Module):
     def __init__(self, pretrained="imagenet"):
-        super(SEResNext50_32x4d, self).__init__()
+        super(EfficientNet_tabular, self).__init__()
         
-        self.model = pretrainedmodels.__dict__[
-            "se_resnext50_32x4d"
-        ](pretrained=pretrained)
-        self.out = nn.Linear(2048, 1)
+        self.model_image = EfficientNet.from_pretrained('efficientnet-b1')
+        self.model_image._fc = nn.Linear(1280, 512, bias=True)
+
+        self.model_tabular = nn.Sequential(
+            nn.Linear(4, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(256, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Dropout(0.5)
+        )
+        self.model_out = nn.Sequential(
+            nn.Linear(768, 1024),
+            nn.BatchNorm1d(1024),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+        )
+
+        self.out = nn.Linear(1024, 1)
     
-    # depending on what the engine returns
-    def forward(self, image, targets):
+    def forward(self, image, metadata, targets):
         bs, _, _, _ = image.shape
         
-        x = self.model.features(image)
-        x = F.adaptive_avg_pool2d(x, 1)
-        x = x.reshape(bs, -1)
+        x1 = self.model_image(image)
+        x1 = x1.view(x1.size(0), -1)
         
-        out = self.out(x)
+        x2 = self.model_tabular(metadata)
+        x2 = x2.view(x2.size(0), -1)
+        
+        x3 = torch.cat((x1, x2), 1)
+        x4 = self.model_out(x3)
+
+        out = self.out(x4)
         loss = nn.BCEWithLogitsLoss()(
-            out, targets.view(-1, 1).type_as(x)
+            out, targets.view(-1, 1).type_as(x4)
         )
 
         return out, loss
 
+
 def train(fold):
-    training_data_path = "/home/dragoshh1984/repos/kaggle/datasets/melanomia_classification/train_224/"
+    training_data_path = "/home/dragoshh1984/repos/kaggle/datasets/melanomia_classification/512x512-dataset-melanoma/512x512-dataset-melanoma"
     model_path = "/home/dragoshh1984/repos/kaggle/melanomia-classification"
-    df = pd.read_csv("/home/dragoshh1984/repos/kaggle/datasets/melanomia_classification/train_folds.csv")
+    df = pd.read_csv("/home/dragoshh1984/repos/kaggle/datasets/melanomia_classification/new_train.csv")
 
     # defines
     device = "cuda"
-    epochs = 50
-    train_bs = 32
+    epochs = 20
+    train_bs = 16
     valid_bs = 16
 
     # for this model
@@ -56,33 +79,54 @@ def train(fold):
     std = (0.229, 0.224, 0.225)
 
     # data for training
-    df_train = df[df.kfold != fold].reset_index(drop=True)
-    df_valid = df[df.kfold == fold].reset_index(drop=True)
+    df_train = df[df.fold != fold].reset_index(drop=True)
+    df_valid = df[df.fold == fold].reset_index(drop=True)
 
     # augmentations
     train_aug = albumentations.Compose(
         [
+            albumentations.RandomResizedCrop(224, 224, (0.7, 1.0)),
+            albumentations.HorizontalFlip(),
+            albumentations.VerticalFlip(),
+            albumentations.Cutout(),
+            albumentations.RandomBrightness(),
+            albumentations.RandomContrast(),
+            albumentations.Rotate(),
+            albumentations.RandomScale(),
+            albumentations.PadIfNeeded(300, 300),
             albumentations.Normalize(mean, std, max_pixel_value=255.0, always_apply=True),
         ]
     )
 
     valid_aug = albumentations.Compose(
         [
+            albumentations.RandomResizedCrop(224, 224, (0.7, 1.0)),
+            albumentations.HorizontalFlip(),
+            albumentations.VerticalFlip(),
+            albumentations.Cutout(),
+            albumentations.RandomBrightness(),
+            albumentations.RandomContrast(),
+            albumentations.Rotate(),
+            albumentations.RandomScale(),
+            albumentations.PadIfNeeded(300, 300),
             albumentations.Normalize(mean, std, max_pixel_value=255.0, always_apply=True),
         ]
     )
 
-    train_images = df_train.image_name.values.tolist()
-    train_images = [os.path.join(training_data_path, i + ".png") for i in train_images]
+    train_images = df_train.image_id.values.tolist()
+    train_images = [os.path.join(training_data_path, i + ".jpg") for i in train_images]
+    train_metada = df_train.drop(["fold", "target", "image_id", "patient_id", "source", "stratify_group"], axis=1).values.tolist()
     train_targets = df_train.target.values
 
-    valid_images = df_valid.image_name.values.tolist()
-    valid_images = [os.path.join(training_data_path, i + ".png") for i in valid_images]
+    valid_images = df_valid.image_id.values.tolist()
+    valid_images = [os.path.join(training_data_path, i + ".jpg") for i in valid_images]
+    valid_metadata = df_valid.drop(["fold", "target", "image_id", "patient_id", "source", "stratify_group"], axis=1).values.tolist()
     valid_targets = df_valid.target.values
 
     # datasets
     training_dataset = ClassificationLoader(
         image_paths=train_images,
+        metadata=train_metada,
         targets=train_targets,
         resize=None,
         augmentations=train_aug
@@ -98,6 +142,7 @@ def train(fold):
 
     valid_dataset = ClassificationLoader(
         image_paths=valid_images,
+        metadata=valid_metadata,
         targets=valid_targets,
         resize=None,
         augmentations=valid_aug
@@ -110,7 +155,7 @@ def train(fold):
         num_workers=4
     )
 
-    model = SEResNext50_32x4d(pretrained="imagenet")
+    model = EfficientNet_tabular(pretrained="imagenet")
     model.to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
@@ -123,7 +168,7 @@ def train(fold):
     )
 
     # early stopping
-    es = EarlyStopping(patience=5, mode="max")
+    es = EarlyStopping(patience=3, mode="max")
     # import pdb; pdb.set_trace()
     for epoch in range(epochs):
         training_loss = Engine.train(
@@ -150,16 +195,14 @@ def train(fold):
             break
 
 def predict(fold):
-    test_data_path = "/home/dragoshh1984/repos/kaggle/datasets/melanomia_classification/test_224/"
+    test_data_path = "/home/dragoshh1984/repos/kaggle/datasets/melanomia_classification/512x512-test/512x512-test"
     model_path = "/home/dragoshh1984/repos/kaggle/melanomia-classification"
-    df_test = pd.read_csv("/home/dragoshh1984/repos/kaggle/datasets/melanomia_classification/test.csv")
+    df_test = pd.read_csv("/home/dragoshh1984/repos/kaggle/datasets/melanomia_classification/new_test.csv")
     df_test.loc[:, "target"] = 0
 
     # defines
     device = "cuda"
-    epochs = 50
-    test_bs = 32
-    valid_bs = 16
+    test_bs = 16
 
     # for this model
     mean = (0.485, 0.456, 0.406)
@@ -172,13 +215,15 @@ def predict(fold):
         ]
     )
 
-    test_images = df_test.image_name.values.tolist()
-    test_images = [os.path.join(test_data_path, i + ".png") for i in test_images]
+    test_images = df_test.image_id.values.tolist()
+    test_images = [os.path.join(test_data_path, i + ".jpg") for i in test_images]
+    test_metadata = df_test.drop(["image_id", "target", "patient_id"], axis=1).values.tolist()
     test_targets = df_test.target.values
 
     # datasets
     test_dataset = ClassificationLoader(
         image_paths=test_images,
+        metadata=test_metadata,
         targets=test_targets,
         resize=None,
         augmentations=test_aug
@@ -192,7 +237,7 @@ def predict(fold):
         num_workers=4
     )
 
-    model = SEResNext50_32x4d(pretrained="imagenet")
+    model = EfficientNet_tabular(pretrained="imagenet")
     model.load_state_dict(torch.load(os.path.join(model_path, f"model{fold}.bin")))
     model.to(device)
 
@@ -206,8 +251,8 @@ def predict(fold):
 
 if __name__ == "__main__":
     # training
-    # for fold in range(0,5):
-    #     train(fold)
+    for fold in range(0,5):
+        train(fold)
     
     #predicting
     all_predictions = []
@@ -215,8 +260,7 @@ if __name__ == "__main__":
         all_predictions.append(predict(fold))
     
     predictions = sum(all_predictions) / 5
-    import pdb; pdb.set_trace()
+    # import pdb; pdb.set_trace()
     submission = pd.read_csv("/home/dragoshh1984/repos/kaggle/datasets/melanomia_classification/sample_submission.csv")
     submission.loc[:, "target"] = predictions
     submission.to_csv("submission.csv", index=False)
-
