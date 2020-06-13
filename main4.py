@@ -21,8 +21,8 @@ class EfficientNet_tabular(nn.Module):
     def __init__(self, pretrained="imagenet"):
         super(EfficientNet_tabular, self).__init__()
         
-        self.model_image = EfficientNet.from_pretrained('efficientnet-b1')
-        self.model_image._fc = nn.Linear(1280, 512, bias=True)
+        self.model_image = EfficientNet.from_pretrained('efficientnet-b7')
+        self.model_image._fc = nn.Linear(2560, 512, bias=True)
 
         self.model_tabular = nn.Sequential(
             nn.Linear(4, 256),
@@ -71,8 +71,8 @@ def train(fold):
     # defines
     device = "cuda"
     epochs = 20
-    train_bs = 16
-    valid_bs = 16
+    train_bs = 2
+    valid_bs = 2
 
     # for this model
     mean = (0.485, 0.456, 0.406)
@@ -85,7 +85,7 @@ def train(fold):
     # augmentations
     train_aug = albumentations.Compose(
         [
-            albumentations.RandomResizedCrop(224, 224, (0.7, 1.0)),
+            albumentations.RandomResizedCrop(180, 180, (0.7, 1.0)),
             albumentations.HorizontalFlip(),
             albumentations.VerticalFlip(),
             albumentations.Cutout(),
@@ -100,7 +100,7 @@ def train(fold):
 
     valid_aug = albumentations.Compose(
         [
-            albumentations.RandomResizedCrop(224, 224, (0.7, 1.0)),
+            albumentations.RandomResizedCrop(180, 180, (0.7, 1.0)),
             albumentations.HorizontalFlip(),
             albumentations.VerticalFlip(),
             albumentations.Cutout(),
@@ -168,7 +168,7 @@ def train(fold):
     )
 
     # early stopping
-    es = EarlyStopping(patience=3, mode="max")
+    es = EarlyStopping(patience=7, mode="max")
     # import pdb; pdb.set_trace()
     for epoch in range(epochs):
         training_loss = Engine.train(
