@@ -14,7 +14,7 @@ from torch.nn import functional as F
 
 from engine import Engine
 from early_stopping import EarlyStopping
-from loader3 import ClassificationLoader
+from loader import ClassificationLoader
 
 
 class EfficientNet_tabular(nn.Module):
@@ -56,7 +56,7 @@ class EfficientNet_tabular(nn.Module):
         x4 = self.model_out(x3)
 
         out = self.out(x4)
-        loss = nn.BCEWithLogitsLoss()(
+        loss = nn.BCEWithLogitsLoss(weight=6*torch.ones(16))(
             out, targets.view(-1, 1).type_as(x4)
         )
 
