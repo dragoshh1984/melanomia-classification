@@ -10,7 +10,8 @@ import torch.nn as nn
 from efficientnet_pytorch import EfficientNet
 from sklearn import metrics
 from torch.nn import functional as F
-
+from catalyst.data.sampler import BalanceClassSampler
+from torch.utils.data.sampler import SequentialSampler
 
 from engine import Engine
 from early_stopping import EarlyStopping
@@ -21,8 +22,8 @@ class EfficientNet_tabular(nn.Module):
     def __init__(self, pretrained="imagenet"):
         super(EfficientNet_tabular, self).__init__()
         
-        self.model_image = EfficientNet.from_pretrained('efficientnet-b7')
-        self.model_image._fc = nn.Linear(2560, 512, bias=True)
+        self.model_image = EfficientNet.from_pretrained('efficientnet-b1')
+        self.model_image._fc = nn.Linear(1280, 512, bias=True)
 
         self.model_tabular = nn.Sequential(
             nn.Linear(4, 256),
@@ -32,13 +33,13 @@ class EfficientNet_tabular(nn.Module):
             nn.Linear(256, 256),
             nn.BatchNorm1d(256),
             nn.ReLU(),
-            nn.Dropout(0.5)
+            nn.Dropout(0.4)
         )
         self.model_out = nn.Sequential(
             nn.Linear(768, 1024),
             nn.BatchNorm1d(1024),
             nn.ReLU(),
-            nn.Dropout(0.5),
+            nn.Dropout(0.4),
         )
 
         self.out = nn.Linear(1024, 1)
@@ -56,7 +57,9 @@ class EfficientNet_tabular(nn.Module):
         x4 = self.model_out(x3)
 
         out = self.out(x4)
-        loss = nn.BCEWithLogitsLoss()(
+        weight = 0.7*torch.ones([1]).cuda()
+        weight.to('cuda')
+        loss = nn.BCEWithLogitsLoss(weight=weight)(
             out, targets.view(-1, 1).type_as(x4)
         )
 
@@ -70,9 +73,9 @@ def train(fold):
 
     # defines
     device = "cuda"
-    epochs = 20
-    train_bs = 2
-    valid_bs = 2
+    epochs = 10
+    train_bs = 16
+    valid_bs = 16
 
     # for this model
     mean = (0.485, 0.456, 0.406)
@@ -80,35 +83,35 @@ def train(fold):
 
     # data for training
     df_train = df[df.fold != fold].reset_index(drop=True)
-    df_valid = df[df.fold == fold].reset_index(drop=True)
+    df_valid = df[(df.fold == fold) & (df.source == 'ISIC20')].reset_index(drop=True)
 
     # augmentations
     train_aug = albumentations.Compose(
         [
-            albumentations.RandomResizedCrop(180, 180, (0.7, 1.0)),
+            albumentations.RandomResizedCrop(224, 224, (0.7, 1.0)),
             albumentations.HorizontalFlip(),
             albumentations.VerticalFlip(),
             albumentations.Cutout(),
             albumentations.RandomBrightness(),
             albumentations.RandomContrast(),
-            albumentations.Rotate(),
+            # albumentations.Rotate(),
             albumentations.RandomScale(),
-            albumentations.PadIfNeeded(300, 300),
+            albumentations.PadIfNeeded(330, 330),
             albumentations.Normalize(mean, std, max_pixel_value=255.0, always_apply=True),
         ]
     )
 
     valid_aug = albumentations.Compose(
         [
-            albumentations.RandomResizedCrop(180, 180, (0.7, 1.0)),
+            albumentations.RandomResizedCrop(224, 224, (0.7, 1.0)),
             albumentations.HorizontalFlip(),
             albumentations.VerticalFlip(),
             albumentations.Cutout(),
             albumentations.RandomBrightness(),
             albumentations.RandomContrast(),
-            albumentations.Rotate(),
+            # albumentations.Rotate(),
             albumentations.RandomScale(),
-            albumentations.PadIfNeeded(300, 300),
+            albumentations.PadIfNeeded(330, 330),
             albumentations.Normalize(mean, std, max_pixel_value=255.0, always_apply=True),
         ]
     )
@@ -135,8 +138,10 @@ def train(fold):
     # loaders
     train_loader = torch.utils.data.DataLoader(
         training_dataset,
+        # sampler=BalanceClassSampler(labels=train_targets, mode="downsampling"),
         batch_size=train_bs,
-        shuffle=True,
+        drop_last=True,
+        pin_memory=False,
         num_workers=4
     )
 
@@ -150,8 +155,10 @@ def train(fold):
     
     valid_loader = torch.utils.data.DataLoader(
         valid_dataset,
+        # sampler=SequentialSampler(valid_dataset),
         batch_size=valid_bs,
         shuffle=False,
+        pin_memory=False,
         num_workers=4
     )
 
@@ -168,7 +175,7 @@ def train(fold):
     )
 
     # early stopping
-    es = EarlyStopping(patience=7, mode="max")
+    es = EarlyStopping(patience=5, mode="max")
     # import pdb; pdb.set_trace()
     for epoch in range(epochs):
         training_loss = Engine.train(
@@ -188,7 +195,7 @@ def train(fold):
         scheduler.step(auc)
 
         print(f"epoch={epoch}, auc={auc}")
-        es(auc, model, os.path.join(model_path, f"new_model{fold}.bin"))
+        es(auc, model, os.path.join(model_path, f"model_v2_{fold}.bin"))
 
         if es.early_stop:
             print("early stopping")
@@ -211,6 +218,15 @@ def predict(fold):
     # augmentations
     test_aug = albumentations.Compose(
         [
+            albumentations.RandomResizedCrop(224, 224, (0.7, 1.0)),
+            albumentations.HorizontalFlip(),
+            albumentations.VerticalFlip(),
+            albumentations.Cutout(),
+            albumentations.RandomBrightness(),
+            albumentations.RandomContrast(),
+            # albumentations.Rotate(),
+            albumentations.RandomScale(),
+            albumentations.PadIfNeeded(330, 330),
             albumentations.Normalize(mean, std, max_pixel_value=255.0, always_apply=True),
         ]
     )
@@ -238,7 +254,7 @@ def predict(fold):
     )
 
     model = EfficientNet_tabular(pretrained="imagenet")
-    model.load_state_dict(torch.load(os.path.join(model_path, f"new_model{fold}.bin")))
+    model.load_state_dict(torch.load(os.path.join(model_path, f"model_v2_{fold}.bin")))
     model.to(device)
 
     predictions = Engine.predict(
@@ -250,6 +266,9 @@ def predict(fold):
     return np.vstack((predictions)).ravel()
 
 if __name__ == "__main__":
+    import warnings
+
+    warnings.filterwarnings("ignore", category=DeprecationWarning) 
     # training
     for fold in range(0,5):
         train(fold)
@@ -263,4 +282,4 @@ if __name__ == "__main__":
     # import pdb; pdb.set_trace()
     submission = pd.read_csv("/home/dragoshh1984/repos/kaggle/datasets/melanomia_classification/sample_submission.csv")
     submission.loc[:, "target"] = predictions
-    submission.to_csv("my_submission_new.csv", index=False)
+    submission.to_csv("submission_v2.csv", index=False)
