@@ -14,7 +14,8 @@ from torch.nn import functional as F
 
 from engine import Engine
 from early_stopping import EarlyStopping
-from loader import ClassificationLoader
+from loader3 import ClassificationLoader
+from loss import FocalLoss
 
 class EfficientNet_tabular(nn.Module):
     def __init__(self, pretrained="imagenet"):
@@ -59,6 +60,13 @@ class EfficientNet_tabular(nn.Module):
             out, targets.view(-1, 1).type_as(x4)
         )
 
+        # loss = FocalLoss(
+        #     alpha = 0.75,
+        #     gamma=2,
+        #     logits=True
+        # )(
+        #     out, targets.view(-1, 1).type_as(x4)
+        # )
         return out, loss
 
 def confusion_matrix(preds, targets, conf_matrix):
@@ -125,7 +133,7 @@ def evaluate(fold):
     )
 
     model = EfficientNet_tabular(pretrained="imagenet")
-    model.load_state_dict(torch.load(os.path.join(model_path, f"model{fold}.bin")))
+    model.load_state_dict(torch.load(os.path.join(model_path, f"model_v2_{fold}.bin")))
     model.to(device)
     predictions = Engine.predict(
         valid_loader,

@@ -13,9 +13,11 @@ from torch.nn import functional as F
 from catalyst.data.sampler import BalanceClassSampler
 from torch.utils.data.sampler import SequentialSampler
 
+from custom_augmentation import Microscope
 from engine import Engine
 from early_stopping import EarlyStopping
 from loader3 import ClassificationLoader
+from loss import FocalLoss
 
 
 class EfficientNet_tabular(nn.Module):
@@ -33,13 +35,13 @@ class EfficientNet_tabular(nn.Module):
             nn.Linear(256, 256),
             nn.BatchNorm1d(256),
             nn.ReLU(),
-            nn.Dropout(0.4)
+            nn.Dropout(0.5)
         )
         self.model_out = nn.Sequential(
             nn.Linear(768, 1024),
             nn.BatchNorm1d(1024),
             nn.ReLU(),
-            nn.Dropout(0.4),
+            nn.Dropout(0.5),
         )
 
         self.out = nn.Linear(1024, 1)
@@ -57,11 +59,19 @@ class EfficientNet_tabular(nn.Module):
         x4 = self.model_out(x3)
 
         out = self.out(x4)
-        weight = 0.7*torch.ones([1]).cuda()
-        weight.to('cuda')
-        loss = nn.BCEWithLogitsLoss(weight=weight)(
+        # weight = 12*torch.ones([1]).cuda()
+        # weight.to('cuda')
+        loss = nn.BCEWithLogitsLoss()(
             out, targets.view(-1, 1).type_as(x4)
         )
+
+        # loss = FocalLoss(
+        #     alpha = 0.75,
+        #     gamma=2,
+        #     logits=True
+        # )(
+        #     out, targets.view(-1, 1).type_as(x4)
+        # )
 
         return out, loss
 
@@ -83,35 +93,37 @@ def train(fold):
 
     # data for training
     df_train = df[df.fold != fold].reset_index(drop=True)
-    df_valid = df[(df.fold == fold) & (df.source == 'ISIC20')].reset_index(drop=True)
+    df_valid = df[df.fold == fold].reset_index(drop=True)
 
     # augmentations
     train_aug = albumentations.Compose(
         [
-            albumentations.RandomResizedCrop(224, 224, (0.7, 1.0)),
+            albumentations.RandomResizedCrop(128, 128, (0.7, 1.0)),
             albumentations.HorizontalFlip(),
             albumentations.VerticalFlip(),
             albumentations.Cutout(),
             albumentations.RandomBrightness(),
             albumentations.RandomContrast(),
-            # albumentations.Rotate(),
+            albumentations.Rotate(),
             albumentations.RandomScale(),
-            albumentations.PadIfNeeded(330, 330),
+            albumentations.PadIfNeeded(300, 300),
+            Microscope(always_apply=True),
             albumentations.Normalize(mean, std, max_pixel_value=255.0, always_apply=True),
         ]
     )
 
     valid_aug = albumentations.Compose(
         [
-            albumentations.RandomResizedCrop(224, 224, (0.7, 1.0)),
+            albumentations.RandomResizedCrop(128, 128, (0.7, 1.0)),
             albumentations.HorizontalFlip(),
             albumentations.VerticalFlip(),
             albumentations.Cutout(),
             albumentations.RandomBrightness(),
             albumentations.RandomContrast(),
-            # albumentations.Rotate(),
+            albumentations.Rotate(),
             albumentations.RandomScale(),
-            albumentations.PadIfNeeded(330, 330),
+            albumentations.PadIfNeeded(300, 300),
+            Microscope(always_apply=True),
             albumentations.Normalize(mean, std, max_pixel_value=255.0, always_apply=True),
         ]
     )
@@ -140,8 +152,7 @@ def train(fold):
         training_dataset,
         # sampler=BalanceClassSampler(labels=train_targets, mode="downsampling"),
         batch_size=train_bs,
-        drop_last=True,
-        pin_memory=False,
+        shuffle=True,
         num_workers=4
     )
 
@@ -158,7 +169,6 @@ def train(fold):
         # sampler=SequentialSampler(valid_dataset),
         batch_size=valid_bs,
         shuffle=False,
-        pin_memory=False,
         num_workers=4
     )
 
@@ -175,7 +185,7 @@ def train(fold):
     )
 
     # early stopping
-    es = EarlyStopping(patience=5, mode="max")
+    es = EarlyStopping(patience=3, mode="max")
     # import pdb; pdb.set_trace()
     for epoch in range(epochs):
         training_loss = Engine.train(
@@ -218,7 +228,7 @@ def predict(fold):
     # augmentations
     test_aug = albumentations.Compose(
         [
-            albumentations.RandomResizedCrop(224, 224, (0.7, 1.0)),
+            albumentations.RandomResizedCrop(128, 128, (0.7, 1.0)),
             albumentations.HorizontalFlip(),
             albumentations.VerticalFlip(),
             albumentations.Cutout(),
@@ -226,7 +236,8 @@ def predict(fold):
             albumentations.RandomContrast(),
             # albumentations.Rotate(),
             albumentations.RandomScale(),
-            albumentations.PadIfNeeded(330, 330),
+            albumentations.PadIfNeeded(300, 300),
+            Microscope(always_apply=True),
             albumentations.Normalize(mean, std, max_pixel_value=255.0, always_apply=True),
         ]
     )
